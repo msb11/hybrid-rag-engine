@@ -1,0 +1,12 @@
+# Secrets
+.env
+*.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node / React (for Phase 3)
+node_modules/
+dist/
