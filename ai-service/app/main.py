@@ -10,6 +10,10 @@ from app.chunker import extract_and_chunk_pdf
 from app.db import save_document_and_chunks
 from google.genai.errors import APIError
 
+from pydantic import BaseModel
+from typing import Literal
+from app.retriever import embed_query, check_cache, save_cache, retrieve_chunks, generate_answer
+
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 app = FastAPI(title="Hybrid RAG Engine - AI Service")
@@ -62,4 +66,42 @@ async def ingest_pdf(file: UploadFile = File(...)):
         "title": file.filename,
         "chunk_count": len(chunks),
         "elapsed_ms": elapsed_ms,
+    }
+
+class SearchRequest(BaseModel):
+    query: str
+    mode: Literal["hybrid_rrf", "vector_only", "fts_only"] = "hybrid_rrf"
+    top_k: int = 5
+    use_cache: bool = True
+
+@app.post("/search")
+async def search_docs(req: SearchRequest):
+    t0 = time.perf_counter()
+    query_emb = embed_query(req.query)
+
+    if req.use_cache:
+        cached = check_cache(query_emb)
+        if cached:
+            return {
+                "answer": cached["answer"],
+                "sources": cached["sources"],
+                "mode": req.mode,
+                "cache_hit": True,
+                "retrieval_ms": round((time.perf_counter() - t0) * 1000, 2),
+                "total_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+
+    sources, retrieval_ms = retrieve_chunks(req.query, query_emb, mode=req.mode, top_k=req.top_k)
+    answer = generate_answer(req.query, sources)
+
+    if req.use_cache and sources:
+        save_cache(req.query, query_emb, answer, sources)
+
+    return {
+        "answer": answer,
+        "sources": sources,
+        "mode": req.mode,
+        "cache_hit": False,
+        "retrieval_ms": retrieval_ms,
+        "total_ms": round((time.perf_counter() - t0) * 1000, 2),
     }
